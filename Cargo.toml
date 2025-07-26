@@ -1,0 +1,12 @@
+[package]
+name = "d2l"
+version = "0.0.1"
+edition = "2024"
+description = "动手学深度学习"
+license = "MIT"
+
+
+[dependencies]
+candle-core = "0.9.1"
+ndarray = "0.16.1"
+polars = { version = "0.49.1", features = ["lazy", "temporal", "describe", "json", "parquet", "dtype-datetime","sql"] }
