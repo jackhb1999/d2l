@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2024"
 description = "动手学深度学习"
 license = "MIT"
+repository = "https://github.com/jackhb1999/d2l"
 
 
 [dependencies]

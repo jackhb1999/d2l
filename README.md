@@ -17,3 +17,9 @@ cargo doc --open
 | numpy | ndarray |
 | pandas | polars |
 | PyTorch | candle |
+
+
+
+其他参考：
+- [candle](how-to-use:[candle](https://github.com/huggingface/candle/blob/main/README.md#how-to-use))
+- [candle-tutorial]([教程](https://github.com/ToluClassics/candle-tutorial?tab=readme-ov-file#tensor-operations))
