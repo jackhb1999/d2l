@@ -1,4 +1,5 @@
 use candle_core::{Device, Tensor};
+use std::error::Error;
 
 /// ## 2.1.1 入门
 ///
@@ -183,7 +184,7 @@ use candle_core::{Device, Tensor};
 /// 可以看出candle的张量初始化较为严格，或者说candle库的使用有些严格，这种严格贯彻了rust的设计哲学。
 /// 我们要清楚严格是为性能、安全作基石，多加练习，无需抗拒。
 // #[test]
-pub fn getting_started() -> Result<(), Box<dyn std::error::Error>> {
+pub fn getting_started() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
@@ -223,7 +224,7 @@ pub fn getting_started() -> Result<(), Box<dyn std::error::Error>> {
 /// [0.5000, 1.0000, 2.0000, 4.0000]\
 /// Tensor[[4], f64]\
 /// [ 1.0000,  4.0000, 16.0000, 64.0000]\
-/// Tensor[[4], f64]\
+/// Tensor[[4], f64]
 /// ***
 ///
 ///<br>
@@ -236,16 +237,208 @@ pub fn getting_started() -> Result<(), Box<dyn std::error::Error>> {
 /// println!("{}", &x.exp()?);
 /// ```
 /// ***
-/// [2.7183e0, 7.3891e0, 5.4598e1, 2.9810e3]/
+/// [2.7183e0, 7.3891e0, 5.4598e1, 2.9810e3]\
 /// Tensor[[4], f64]
 /// ***
 ///
 ///<br>
+///除了按元素计算外，我们还可以执行线性代数运算，包括向量点积和矩阵乘法。 我们将在 2.3节中解释线性代数的重点内容。
+///
+/// 我们也可以把多个张量连结（concatenate）在一起， 把它们端对端地叠起来形成一个更大的张量。
+/// 我们只需要提供张量列表，并给出沿哪个轴连结。
+/// 下面的例子分别演示了当我们沿行（轴-0，形状的第一个元素） 和按列（轴-1，形状的第二个元素）连结两个矩阵时，会发生什么情况。
+/// 我们可以看到，第一个输出张量的轴-0长度（6）是两个输入张量轴-0长度的总和（3+3）；
+/// 第二个输出张量的轴-1长度（8）是两个输入张量轴-1长度的总和（4+4）。
+///
+/// ```rust
+/// use candle_core::{Device, Tensor};
+/// let device = Device::Cpu;
+/// let x = Tensor::arange(0., 12., &device)?.reshape((3, 4))?;
+/// let y = Tensor::new(
+///    vec![
+///     vec![2., 1., 4., 3.],
+///     vec![1., 2., 3., 4.],
+///     vec![4., 3., 2., 1.],
+///    ],
+///    &device,
+/// )?;
+/// let z = Tensor::cat(&[&x, &y], 0)?;
+/// println!("{z}");
+/// let z = Tensor::cat(&[x, y], 1)?;
+/// println!("{z}");
+/// Ok(())
+/// ```
+///***
+/// [[ 0.,  1.,  2.,  3.],\
+///  [ 4.,  5.,  6.,  7.],\
+///  [ 8.,  9., 10., 11.],\
+///  [ 2.,  1.,  4.,  3.],\
+///  [ 1.,  2.,  3.,  4.],\
+///  [ 4.,  3.,  2.,  1.]]\
+/// Tensor[[6, 4], f64]\
+/// [[ 0.,  1.,  2.,  3.,  2.,  1.,  4.,  3.],\
+///  [ 4.,  5.,  6.,  7.,  1.,  2.,  3.,  4.],\
+///  [ 8.,  9., 10., 11.,  4.,  3.,  2.,  1.]]\
+/// Tensor[[3, 8], f64]
+///***
+///
+/// <br>
+///有时，我们想通过逻辑运算符构建二元张量。
+/// 以X == Y为例： 对于每个位置，如果X和Y在该位置相等，则新张量中相应项的值为1。
+/// 这意味着逻辑语句X == Y在该位置处为真，否则该位置为0。
+///
+///```rust
+/// use candle_core::{Device, Tensor};
+/// let device = Device::Cpu;
+///     let x = Tensor::arange(0., 12., &device)?.reshape((3, 4))?;
+///     let y = Tensor::new(
+///         vec![
+///             vec![2., 1., 4., 3.],
+///             vec![1., 2., 3., 4.],
+///             vec![4., 3., 2., 1.],
+///         ],
+///         &device,
+///     )?;
+///     let z = x.eq(&y)?;
+///     println!("{z}");
+/// ```
+///***
+///[[0, 1, 0, 1],\
+///  [0, 0, 0, 0],\
+///  [0, 0, 0, 0]]\
+/// Tensor[[3, 4], u8]
+/// ***
+///
+/// <br>
+///对张量中的所有元素进行求和，会产生一个单元素张量。
+///
+/// ```rust
+/// use candle_core::{Device, Tensor};
+///    let device = Device::Cpu;
+///     let x = Tensor::arange(0., 12., &device)?.reshape((3, 4))?;
+///     println!("{}",x.sum_all()?);
+/// ```
+/// ***
+/// [66.]\
+/// Tensor[[], f64]
+/// ***
+///
+// #[test]
+pub fn operations() -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+/// ## 2.1.3 广播机制
+///
+///在上面的部分中，我们看到了如何在相同形状的两个张量上执行按元素操作。
+/// 在某些情况下，即使形状不同，我们仍然可以通过调用 广播机制（broadcasting mechanism）来执行按元素操作。
+/// 这种机制的工作方式如下：
+/// 1. 通过适当复制元素来扩展一个或两个数组，以便在转换之后，两个张量具有相同的形状；
+/// 2. 对生成的数组执行按元素操作。
+///
+/// 在大多数情况下，我们将沿着数组中长度为1的轴进行广播，如下例子：
+///
+/// ```rust
+/// use candle_core::{Device, Tensor};
+///    let device = Device::Cpu;
+///     let a = Tensor::arange(0., 3., &device)?.reshape((3, 1))?;
+///     let b = Tensor::arange(0., 2., &device)?.reshape((1, 2))?;
+///     let c = a.broadcast_add(&b)?;
+///     println!("{c}");
+/// ```
+/// ***
+///[[0., 1.],\
+///  [1., 2.],\
+///  [2., 3.]]\
+/// Tensor[[3, 2], f64]
+/// ***
+///
+/// <br>
+/// 由于a和b分别是（3，1）和（1，2） 矩阵，如果让它们相加，它们的形状不匹配。
+/// 我们将两个矩阵广播为一个更大的矩阵，如下所示：矩阵a将复制列， 矩阵b将复制行，然后再按元素相加。
+///
+// #[test]
+pub fn broadcast() -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+/// ## 2.1.4 索引和切片
+///
+///就像在任何其他Python数组中一样，张量中的元素可以通过索引访问。
+/// 与任何Python数组一样：第一个元素的索引是0，最后一个元素索引是-1； 可以指定范围以包含第一个元素和最后一个之前的元素。
+///
+/// 如下所示，我们可以用get(2)选择最后一个元素，可以用i(1..3)选择第二个和第三个元素：
+///
+/// ``` rust
+/// use candle_core::{Device, IndexOp, Tensor};
+///     let device = Device::Cpu;
+///    let x = Tensor::arange(0., 12., &device)?.reshape((3, 4))?;
+///    let result = x.get(2)?;
+///    println!("{result}");
+///    let result = x.i(1..3)?;
+///    println!("{result}");
+///    let result = x.narrow(0, 1, 2)?;
+///    println!("{result}");
+///    let result = x.narrow(1, 1, 2)?;
+///    println!("{result}");
+/// ```
+/// ***
+///[ 8.,  9., 10., 11.]\
+/// Tensor[[4], f64]\
+/// [[ 4.,  5.,  6.,  7.],\
+///  [ 8.,  9., 10., 11.]]\
+/// Tensor[[2, 4], f64]\
+/// [[ 4.,  5.,  6.,  7.],\
+///  [ 8.,  9., 10., 11.]]\
+/// Tensor[[2, 4], f64]\
+/// [[ 1.,  2.],\
+///  [ 5.,  6.],\
+///  [ 9., 10.]]\
+/// Tensor[[3, 2], f64]
+/// ***
+///
+/// <br>
+/// candle的Tensor索引或切片还是比较好操作的，但是修改没有较好的支持。
+///
+///
+// #[test]
+pub fn indexing_and_slicing() -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+/// ## 2.1.5 节省内存
+///
+/// 这是rust开发最不必关注的问题，这是您遵从所有权的无形收获。
+pub fn saving_memory() -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+/// ## 2.1.6 转换为其他对象
+///
+/// 我们想要将candle的Tensor转换为其他对象，最好的方式是将对应的Vec导出
+///
+/// ```rust
+/// use candle_core::{Device, IndexOp, Tensor};
+/// let device = Device::Cpu;
+///     let x = Tensor::arange(0., 12., &device)?.reshape((3, 4))?;
+///     let result = x.to_vec2::<f64>()?;
+///     println!("{:?}", result);
+/// ```
+/// ***
+/// [[0.0, 1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0], [8.0, 9.0, 10.0, 11.0]]
+/// ***
 ///
 #[test]
-pub fn operations() -> Result<(), Box<dyn std::error::Error>> {
+pub fn conversion_to_other_objects() -> Result<(), Box<dyn Error>> {
     let device = Device::Cpu;
-    let x = Tensor::new(vec![1., 2., 4., 8.], &device)?;
-    println!("{}", &x.exp()?);
+    let x = Tensor::arange(0., 12., &device)?.reshape((3, 4))?;
+    let result = x.to_vec2::<f64>()?;
+    println!("{:?}", result);
+    Ok(())
+}
+
+/// ## 2.1.7 小结
+///
+pub fn summary() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
