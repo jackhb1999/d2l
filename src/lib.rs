@@ -28,18 +28,14 @@ pub mod introduction;
 /// 如果读者想要深入理解全部数学内容，可以进一步学习本书数学附录中给出的数学基础知识。
 
 pub mod preliminaries;
+mod llm;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+
+// 写一个方法,用于DataFrame到Tensor的转换
+
+
