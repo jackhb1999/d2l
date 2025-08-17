@@ -1,5 +1,7 @@
 use candle_core::{DType, Device, Module, Result, Tensor, Var};
-use candle_nn::{Init, Linear, VarBuilder, VarMap, linear};
+use candle_nn::{Init, Linear, Optimizer, SGD, VarBuilder, VarMap, linear, loss, ops};
+use rand::prelude::SliceRandom;
+use std::cmp;
 
 fn print_varmap(varmap: &VarMap) {
     let data = varmap.data().lock().unwrap();
@@ -81,7 +83,6 @@ struct SimpleModel {
     linear2: Linear,
     linear3: Linear,
 }
-
 impl SimpleModel {
     fn new(vb: VarBuilder, in_dim: usize, hidden_dim: usize, out_dim: usize) -> Result<Self> {
         let linear1 = linear(in_dim, hidden_dim, vb.pp("linear1"))?;
@@ -104,14 +105,243 @@ impl SimpleModel {
     }
 }
 
+trait Dataset {
+    fn len(&self) -> Result<usize>;
+    fn get_batch(&self, start: usize, end: usize) -> Result<(Tensor, Tensor)>;
+    fn shuffle(&mut self) -> Result<()>;
+}
+
+pub struct DemoDataset {
+    inputs: Tensor,
+    targets: Tensor,
+}
+
+impl DemoDataset {
+    pub fn new(inputs: Tensor, targets: Tensor) -> Result<Self> {
+        Ok(Self { inputs, targets })
+    }
+
+    fn get_inx(&self, inx: usize) -> Result<(Tensor, Tensor)> {
+        let x_inx = self.inputs.narrow(0, inx, 1)?;
+        let y_inx = self.targets.narrow(0, inx, 1)?;
+        Ok((x_inx, y_inx))
+    }
+}
+
+impl Dataset for DemoDataset {
+    fn len(&self) -> Result<usize> {
+        Ok(self.inputs.dim(0)?)
+    }
+    fn get_batch(&self, start: usize, end: usize) -> Result<(Tensor, Tensor)> {
+        let x_inx = self.inputs.narrow(0, start, end - start)?;
+        let y_inx = self.targets.narrow(0, start, end - start)?;
+        Ok((x_inx, y_inx))
+    }
+    // 打乱顺序
+    fn shuffle(&mut self) -> Result<()> {
+        let len = self.len()?;
+        let mut indices: Vec<u32> = (0..len).map(|i| i as u32).collect();
+        let mut rng = rand::rng();
+        indices.shuffle(&mut rng);
+        let indices_tensor = Tensor::from_vec(indices, (len,), self.inputs.device())?;
+        self.inputs = self.inputs.index_select(&indices_tensor, 0)?;
+        self.targets = self.targets.index_select(&indices_tensor, 0)?;
+        Ok(())
+    }
+}
+
+struct DatasetLoader<'a> {
+    dataset: Box<dyn Dataset + 'a>,
+    batch_size: usize,
+    current_index: usize,
+    shuffle: bool,
+}
+impl<'a> DatasetLoader<'a> {
+    fn new<D: Dataset + 'a>(dataset: D, batch_size: usize, shuffle: bool) -> Result<Self> {
+        Ok(Self {
+            dataset: Box::new(dataset),
+            batch_size,
+            current_index: 0,
+            shuffle,
+        })
+    }
+    fn reset(&mut self) -> Result<()> {
+        self.current_index = 0;
+        if self.shuffle {
+            self.dataset.shuffle()?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Iterator for DatasetLoader<'a> {
+    type Item = Result<(Tensor, Tensor)>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let start = self.current_index * self.batch_size;
+        let end = cmp::min(start + self.batch_size, self.dataset.len().ok()?);
+        if start >= end {
+            return None;
+        }
+        let batch = self.dataset.get_batch(start, end).ok()?;
+        self.current_index += 1;
+        Some(Ok(batch))
+    }
+}
+
 #[test]
 fn linear_() -> Result<()> {
     let device = Device::Cpu;
     let varmap = VarMap::new();
     let mut vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let model = SimpleModel::new(vb, 2, 9, 1)?;
-    print_varmap(&varmap);
-    // let x = Tensor::randn(0.0f32, 1.0f32, (1, 2), &device)?;
-    // let y = model.forward(&x)?;
+    let model = SimpleModel::new(vb, 2, 9, 2)?;
+    // print_varmap(&varmap);
+    let x_vec = vec![-1.2f32, 3.1, -0.9, 2.9, -0.5, 2.6, 2.3, -1.1, 2.7, -1.5];
+    let x_train = Tensor::from_vec(x_vec, (5, 2), &device)?;
+    let y_vec = vec![0u32, 0, 0, 1, 1];
+    let y_train = Tensor::from_vec(y_vec, 5, &device)?;
+    // let y_predict = model.forward(&x_train)?;
+    // print_varmap(&varmap);
+    let mut train_dataset = DemoDataset::new(x_train, y_train)?;
+    let mut dataload = DatasetLoader::new(train_dataset, 1, true)?;
+    dataload.reset()?;
+    for (inx, batch) in dataload.enumerate() {
+        println!("inx: {}", inx);
+        let (x, y) = batch?;
+        println!("batch: {}", x);
+    }
+    Ok(())
+}
+
+#[test]
+fn train_() -> Result<()> {
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let mut vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let model = SimpleModel::new(vb, 2, 20, 2)?;
+    let x_train = Tensor::from_vec(
+        vec![-1.2f32, 3.1, -0.9, 2.9, -0.5, 2.6, 2.3, -1.1, 2.7, -1.5],
+        (5, 2),
+        &device,
+    )?;
+    let y_train = Tensor::from_vec(vec![0u32, 0, 0, 1, 1], 5, &device)?;
+    let train_dataset = DemoDataset::new(x_train, y_train)?;
+    let x_val = Tensor::from_vec(vec![-0.8f32, 2.8, 2.6, -1.6], (2, 2), &device)?;
+    let y_val = Tensor::from_vec(vec![0u32, 1], 2, &device)?;
+    let val_dataset = DemoDataset::new(x_val, y_val)?;
+    let mut train_dataload = DatasetLoader::new(train_dataset, 2, true)?;
+    let mut val_dataload = DatasetLoader::new(val_dataset, 2, false)?;
+    let mut sgd = SGD::new(varmap.all_vars(), 0.01)?;
+    let epochs = 3;
+    for epoch in 0..epochs {
+        train_dataload.reset()?;
+        val_dataload.reset()?;
+        for batch in &mut train_dataload {
+            let (x, y) = batch?;
+            let predict = model.forward(&x)?;
+            let loss = loss::cross_entropy(&predict, &y)?;
+            sgd.backward_step(&loss)?;
+            println!("epoch:{} train loss: {}", epoch, loss);
+        }
+        for batch in &mut val_dataload {
+            let (x, y) = batch?;
+            let predict = model.forward(&x)?;
+            let loss = loss::cross_entropy(&predict, &y)?;
+            println!("epoch:{} val loss: {}", epoch, loss);
+        }
+    }
+    train_dataload.reset()?;
+    val_dataload.reset()?;
+    for batch in &mut train_dataload {
+        let (x, y) = batch?;
+        let predict = model.forward(&x)?;
+        let softmax = ops::softmax(&predict, 1)?;
+        let label = softmax.argmax(1)?;
+        println!("train label: {}", label);
+        println!("train targets:{}", y);
+        println!(
+            "train acc:{}",
+            label
+                .eq(&y)?
+                .sum(0)?
+                .to_dtype(DType::F32)?
+                .affine(1.0 / (x.dim(0)? as f64), 0.0)?
+        );
+    }
+    for batch in &mut val_dataload {
+        let (x, y) = batch?;
+        let predict = model.forward(&x)?;
+        let softmax = ops::softmax(&predict, 1)?;
+        let label = softmax.argmax(1)?;
+        println!("val label: {}", label);
+        println!("val targets:{}", y);
+        println!(
+            "val acc:{}",
+            label
+                .eq(&y)?
+                .sum(0)?
+                .to_dtype(DType::F32)?
+                .affine(1.0 / (x.dim(0)? as f64), 0.0)?
+        );
+    }
+
+    varmap.save("model.safetensors");
+
+    Ok(())
+}
+
+#[test]
+fn load_train_() -> Result<()> {
+    let device = Device::Cpu;
+    let mut varmap = VarMap::new();
+    let mut vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let model = SimpleModel::new(vb, 2, 20, 2)?;
+    let x_train = Tensor::from_vec(
+        vec![-1.2f32, 3.1, -0.9, 2.9, -0.5, 2.6, 2.3, -1.1, 2.7, -1.5],
+        (5, 2),
+        &device,
+    )?;
+    let y_train = Tensor::from_vec(vec![0u32, 0, 0, 1, 1], 5, &device)?;
+    let train_dataset = DemoDataset::new(x_train, y_train)?;
+    let x_val = Tensor::from_vec(vec![-0.8f32, 2.8, 2.6, -1.6], (2, 2), &device)?;
+    let y_val = Tensor::from_vec(vec![0u32, 1], 2, &device)?;
+    let val_dataset = DemoDataset::new(x_val, y_val)?;
+    let mut train_dataload = DatasetLoader::new(train_dataset, 5, true)?;
+    let mut val_dataload = DatasetLoader::new(val_dataset, 2, false)?;
+    varmap.load("model.safetensors");
+    train_dataload.reset()?;
+    val_dataload.reset()?;
+    for batch in &mut train_dataload {
+        let (x, y) = batch?;
+        let predict = model.forward(&x)?;
+        let softmax = ops::softmax(&predict, 1)?;
+        let label = softmax.argmax(1)?;
+        println!("train label: {}", label);
+        println!("train targets:{}", y);
+        println!(
+            "train acc:{}",
+            label
+                .eq(&y)?
+                .sum(0)?
+                .to_dtype(DType::F32)?
+                .affine(1.0 / (x.dim(0)? as f64), 0.0)?
+        );
+    }
+    for batch in &mut val_dataload {
+        let (x, y) = batch?;
+        let predict = model.forward(&x)?;
+        let softmax = ops::softmax(&predict, 1)?;
+        let label = softmax.argmax(1)?;
+        println!("val label: {}", label);
+        println!("val targets:{}", y);
+        println!(
+            "val acc:{}",
+            label
+                .eq(&y)?
+                .sum(0)?
+                .to_dtype(DType::F32)?
+                .affine(1.0 / (x.dim(0)? as f64), 0.0)?
+        );
+    }
+
     Ok(())
 }
